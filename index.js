@@ -16,7 +16,7 @@ app.use(cors({
     'http://localhost:3000'
   ],
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'admin-username', 'admin-password']
+  allowedHeaders: ['Content-Type']
 }));
 app.use(bodyParser.json({ limit: '100mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '100mb' }));
@@ -101,18 +101,6 @@ async function saveToCloudinary() {
 setInterval(saveToCloudinary, 10000);
 
 // ============================================================
-// ADMIN AUTH HELPER
-// ============================================================
-function adminAuth(req, res) {
-  if (req.headers['admin-username'] !== process.env.ADMIN_USERNAME ||
-      req.headers['admin-password']  !== process.env.ADMIN_PASSWORD) {
-    res.status(401).json({ error: 'Unauthorized.' });
-    return false;
-  }
-  return true;
-}
-
-// ============================================================
 // HEALTH CHECK
 // ============================================================
 app.get('/health', (req, res) => {
@@ -136,7 +124,6 @@ app.get('/cms/load', (req, res) => {
 // CMS CONTENT — SAVE  (CMS posts all text fields)
 // ============================================================
 app.post('/cms/save', async (req, res) => {
-  if (!adminAuth(req, res)) return;
   try {
     cmsData = { ...cmsData, ...req.body, _saved: new Date().toISOString() };
     await saveToCloudinary();
@@ -157,7 +144,6 @@ app.get('/cms/slides', (req, res) => {
 // PROMO SLIDES — SAVE  (CMS posts full slides array)
 // ============================================================
 app.post('/cms/slides', async (req, res) => {
-  if (!adminAuth(req, res)) return;
   try {
     if (!Array.isArray(req.body))
       return res.status(400).json({ error: 'Body must be an array.' });
@@ -173,7 +159,6 @@ app.post('/cms/slides', async (req, res) => {
 // APK — UPLOAD to Cloudinary  (CMS sends base64 data URI)
 // ============================================================
 app.post('/cms/apk', async (req, res) => {
-  if (!adminAuth(req, res)) return;
   try {
     const { name, data } = req.body;
     if (!data || !data.startsWith('data:'))
@@ -219,7 +204,6 @@ app.get('/cms/apk', (req, res) => {
 // APK — DELETE
 // ============================================================
 app.delete('/cms/apk', async (req, res) => {
-  if (!adminAuth(req, res)) return;
   try {
     await cloudinary.uploader.destroy('ebudget-site/eBudget.apk', { resource_type: 'raw' });
     apkMeta = null;
