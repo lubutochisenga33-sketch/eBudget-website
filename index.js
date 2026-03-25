@@ -23,14 +23,15 @@ app.use(bodyParser.urlencoded({ extended: true, limit: '100mb' }));
 // STATIC FILES
 // Website → /        CMS → /cms
 // ============================================================
-app.use('/',    express.static(path.join(__dirname, 'public/website')));
-app.use('/cms', express.static(path.join(__dirname, 'public/cms')));
+const ROOT = path.resolve(__dirname);
+app.use('/',    express.static(path.join(ROOT, 'public/website')));
+app.use('/cms', express.static(path.join(ROOT, 'public/cms')));
 
 app.get('/', (req, res) =>
-  res.sendFile(path.join(__dirname, 'public/website/index.html'))
+  res.sendFile(path.join(ROOT, 'public/website/index.html'))
 );
 app.get('/cms', (req, res) =>
-  res.sendFile(path.join(__dirname, 'public/cms/index.html'))
+  res.sendFile(path.join(ROOT, 'public/cms/index.html'))
 );
 
 // ============================================================
@@ -169,7 +170,8 @@ app.post('/cms/apk', async (req, res) => {
       cloudinary.uploader.upload_stream(
         {
           resource_type: 'raw',
-          public_id:     'ebudget-site/eBudget.apk',
+          public_id:     'ebudget-site/eBudget',
+          format:        'zip',   // Cloudinary blocks .apk — stored as .zip, bytes unchanged
           overwrite:      true,
           invalidate:     true
         },
