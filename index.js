@@ -11,13 +11,11 @@ const PORT = process.env.PORT || 3000;
 // MIDDLEWARE
 // ============================================================
 app.use(cors({
-  origin: [
-    'https://ebudget-website.onrender.com',
-    'http://localhost:3000'
-  ],
+  origin: '*',
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
+app.options('*', cors()); // handle preflight for all routes
 app.use(bodyParser.json({ limit: '100mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '100mb' }));
 
