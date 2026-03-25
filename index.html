@@ -621,17 +621,7 @@ document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
 // ── APK DOWNLOAD ─────────────────────────────────────────────
 function handleAPKClick(e){
   if(e)e.preventDefault();
-  fetch(API+'/cms/apk')
-  .then(function(r){return r.json();})
-  .then(function(d){
-    if(d.available&&d.url){
-      var a=document.createElement('a');
-      a.href=d.url;a.download=d.name||'eBudget.apk';
-      a.target='_blank';
-      document.body.appendChild(a);a.click();document.body.removeChild(a);
-    } else { fallbackWA(); }
-  })
-  .catch(function(){fallbackWA();});
+  window.location.href=API+'/download/apk';
 }
 function fallbackWA(){
   alert('APK not yet uploaded.\nPlease WhatsApp us at +260 966 639 902 to receive the APK directly.');
