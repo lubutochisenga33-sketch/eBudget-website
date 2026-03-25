@@ -1,11 +1,21 @@
 const express    = require('express');
 const cors       = require('cors');
 const bodyParser = require('body-parser');
-const cloudinary = require('cloudinary').v2;
 const path       = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
+
+// ============================================================
+// SUPABASE CLIENT
+// Set SUPABASE_URL and SUPABASE_KEY in Render environment vars
+// ============================================================
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+console.log('Supabase configured:', process.env.SUPABASE_URL ? 'YES' : 'NO');
 
 // ============================================================
 // MIDDLEWARE
@@ -15,7 +25,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
-app.options('*', cors()); // handle preflight for all routes
+app.options('*', cors());
 app.use(bodyParser.json({ limit: '100mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '100mb' }));
 
@@ -35,88 +45,51 @@ app.get('/cms', (req, res) =>
 );
 
 // ============================================================
-// CLOUDINARY CONFIGURATION
+// SUPABASE HELPERS
+// All data lives in the `cms` table as key/value rows:
+//   key: 'cmsData'  → value: { ...all text fields }
+//   key: 'slides'   → value: [ ...slide array ]
 // ============================================================
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
-console.log('Cloudinary configured:', process.env.CLOUDINARY_CLOUD_NAME ? 'YES' : 'NO');
-
-// ============================================================
-// IN-MEMORY STATE
-// ============================================================
-let cmsData = {};    // all website text content
-let slides  = [];    // promo slider images + captions
-let apkMeta = null;  // { name, size, url } — APK stored in Cloudinary
-
-// ============================================================
-// CLOUDINARY PERSISTENCE
-// ============================================================
-async function loadFromCloudinary() {
-  try {
-    const result = await cloudinary.api.resource('ebudget-site/database', { resource_type: 'raw' });
-    const https  = require('https');
-    const raw    = await new Promise((resolve, reject) => {
-      https.get(result.secure_url + '?t=' + Date.now(), res => {
-        let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d));
-      }).on('error', reject);
-    });
-    const data = JSON.parse(raw);
-    cmsData = data.cmsData || {};
-    slides  = data.slides  || [];
-    apkMeta = data.apkMeta || null;
-    console.log(`✅ Loaded — APK: ${apkMeta ? apkMeta.name : 'none'}, slides: ${slides.length}`);
-  } catch (e) {
-    console.log('ℹ️  No existing data, starting fresh');
-  }
+async function dbGet(key) {
+  const { data, error } = await supabase
+    .from('cms')
+    .select('value')
+    .eq('key', key)
+    .single();
+  if (error) return null;
+  return data?.value ?? null;
 }
 
-async function saveToCloudinary() {
-  try {
-    const payload = JSON.stringify(
-      { cmsData, slides, apkMeta, updatedAt: new Date().toISOString() },
-      null, 2
-    );
-    await new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_stream(
-        {
-          resource_type: 'raw',
-          public_id:     'ebudget-site/database',
-          overwrite:      true,
-          invalidate:     true
-        },
-        (err, r) => err ? reject(err) : resolve(r)
-      ).end(Buffer.from(payload));
-    });
-    console.log('✅ Saved at', new Date().toLocaleTimeString());
-  } catch (e) {
-    console.error('❌ Save error:', e.message);
-  }
+async function dbSet(key, value) {
+  const { error } = await supabase
+    .from('cms')
+    .upsert({ key, value }, { onConflict: 'key' });
+  if (error) throw new Error(error.message);
 }
-
-// Auto-save every 10 seconds
-setInterval(saveToCloudinary, 10000);
 
 // ============================================================
 // HEALTH CHECK
 // ============================================================
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const apkUrl = process.env.APK_URL || null;
   res.json({
-    status:     'ok',
-    message:    'eBudget website server is running',
-    cloudinary: process.env.CLOUDINARY_CLOUD_NAME ? 'configured' : 'missing',
-    slides:     slides.length,
-    apk:        apkMeta ? apkMeta.name : 'none'
+    status:   'ok',
+    message:  'eBudget website server is running',
+    supabase: process.env.SUPABASE_URL ? 'configured' : 'missing',
+    apk:      apkUrl ? 'configured' : 'none'
   });
 });
 
 // ============================================================
 // CMS CONTENT — LOAD  (website reads on page load)
 // ============================================================
-app.get('/cms/load', (req, res) => {
-  res.json(cmsData);
+app.get('/cms/load', async (req, res) => {
+  try {
+    const data = await dbGet('cmsData');
+    res.json(data || {});
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ============================================================
@@ -124,8 +97,9 @@ app.get('/cms/load', (req, res) => {
 // ============================================================
 app.post('/cms/save', async (req, res) => {
   try {
-    cmsData = { ...cmsData, ...req.body, _saved: new Date().toISOString() };
-    await saveToCloudinary();
+    const existing = await dbGet('cmsData') || {};
+    const updated  = { ...existing, ...req.body, _saved: new Date().toISOString() };
+    await dbSet('cmsData', updated);
     res.json({ ok: true, message: 'Content saved.' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -133,108 +107,64 @@ app.post('/cms/save', async (req, res) => {
 });
 
 // ============================================================
-// PROMO SLIDES — LOAD  (website reads on page load)
+// PROMO SLIDES — LOAD
 // ============================================================
-app.get('/cms/slides', (req, res) => {
-  res.json(slides);
-});
-
-// ============================================================
-// PROMO SLIDES — SAVE  (CMS posts full slides array)
-// ============================================================
-app.post('/cms/slides', async (req, res) => {
+app.get('/cms/slides', async (req, res) => {
   try {
-    if (!Array.isArray(req.body))
-      return res.status(400).json({ error: 'Body must be an array.' });
-    slides = req.body;
-    await saveToCloudinary();
-    res.json({ ok: true, count: slides.length });
+    const data = await dbGet('slides');
+    res.json(data || []);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // ============================================================
-// APK — UPLOAD to Cloudinary  (CMS sends base64 data URI)
+// PROMO SLIDES — SAVE
 // ============================================================
-app.post('/cms/apk', async (req, res) => {
+app.post('/cms/slides', async (req, res) => {
   try {
-    const { name, data } = req.body;
-    if (!data || !data.startsWith('data:'))
-      return res.status(400).json({ error: 'Invalid APK data.' });
-
-    // Strip data URI prefix and upload raw bytes to Cloudinary
-    const buffer = Buffer.from(data.split(',')[1], 'base64');
-
-    const result = await new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_stream(
-        {
-          resource_type: 'raw',
-          public_id:     'ebudget-site/eBudget',
-          format:        'zip',   // Cloudinary blocks .apk — stored as .zip, bytes unchanged
-          overwrite:      true,
-          invalidate:     true
-        },
-        (err, r) => err ? reject(err) : resolve(r)
-      ).end(buffer);
-    });
-
-    apkMeta = { name: name || 'eBudget.apk', size: buffer.length, url: result.secure_url };
-    await saveToCloudinary();
-
-    res.json({ ok: true, name: apkMeta.name, size: apkMeta.size, url: apkMeta.url });
+    if (!Array.isArray(req.body))
+      return res.status(400).json({ error: 'Body must be an array.' });
+    await dbSet('slides', req.body);
+    res.json({ ok: true, count: req.body.length });
   } catch (e) {
-    console.error('APK upload error:', e.message);
-    res.status(500).json({ error: 'APK upload failed: ' + e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
 // ============================================================
-// APK — GET INFO  (website checks availability + gets URL)
+// APK — GET INFO
+// APK is hosted on GitHub Releases.
+// Set APK_URL in Render environment variables:
+// https://github.com/lubutochisenga33-sketch/eBudget-website/releases/download/v1.0/eBudget.1.apk
 // ============================================================
 app.get('/cms/apk', (req, res) => {
-  if (apkMeta) {
-    res.json({ available: true, name: apkMeta.name, size: apkMeta.size, url: apkMeta.url });
+  const url = process.env.APK_URL || null;
+  if (url) {
+    res.json({ available: true, name: 'eBudget.apk', url });
   } else {
     res.json({ available: false });
   }
 });
 
 // ============================================================
-// APK — DELETE
-// ============================================================
-app.delete('/cms/apk', async (req, res) => {
-  try {
-    await cloudinary.uploader.destroy('ebudget-site/eBudget.apk', { resource_type: 'raw' });
-    apkMeta = null;
-    await saveToCloudinary();
-    res.json({ ok: true, message: 'APK removed from Cloudinary.' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ============================================================
 // START SERVER
 // ============================================================
-loadFromCloudinary().then(() => {
-  app.listen(PORT, () => {
-    console.log(`
+app.listen(PORT, () => {
+  console.log(`
 ╔════════════════════════════════════════════════════╗
 ║   eBudget Website Server                           ║
 ║                                                    ║
 ║   ✅ Running on port ${PORT}                         ║
 ║   🌐 Website  →  /                                 ║
 ║   🛠  CMS      →  /cms                             ║
-║   ☁️  Storage  →  Cloudinary                       ║
-║   📱 APK       →  ${apkMeta ? apkMeta.name : 'not uploaded yet'}
+║   💾 Storage  →  Supabase                          ║
+║   📱 APK       →  GitHub Releases (via APK_URL)    ║
 ╚════════════════════════════════════════════════════╝`);
-  });
 });
 
-// Save on graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('Shutting down — saving data...');
-  await saveToCloudinary();
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Shutting down...');
   process.exit(0);
 });
